@@ -4,25 +4,32 @@ print('Importing libraries...')
 import argparse
 import os
 import random
+import json
 
 # Third-party imports
 import torch
 import numpy as np
 import torch.nn as nn
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 import warnings
+import torch.nn.functional as F
 
 # Local imports
-from scripts.f_environment import get_config, set_deterministic_behaviour
+from scripts.f_environment import get_config
 from scripts.f_dataset import get_datasets, get_dataloaders
 from scripts.f_build import build_model
-from evaluator import get_map
+from pgd_adjusted import PGD_BCE
+from utils import save_adv_example
+
 warnings.filterwarnings("ignore")
+
 
 # Load configuration
 parser = argparse.ArgumentParser(description="Run SwinCVS with specified config")
-parser.add_argument('--config_path', type=str, required=False, default='../config/SwinCVS_config_only_inference.yaml' , help='Path to config YAML file')
-parser.add_argument('--ckpt_path',  type=str, required=False)
+parser.add_argument('--config_path', type=str, required=False, default='config/SwinCVS_config.yaml' , help='Path to config YAML file')
+parser.add_argument('--ckpt_path',  type=str, required=False, default='weights/Sages_Fold2_bestMAP.pt')
+parser.add_argument('--adversarial_split', type=str, default='All', choices=['CVS_only', 'One_only', 'All'])
 args = parser.parse_args()
 
 config = get_config(args.config_path)
@@ -39,12 +46,11 @@ torch.use_deterministic_algorithms(True) # Force deterministic behavior
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8" # CUDA workspace config
 
 
-
 ##############################################################################################
 ##############################################################################################
 # DATASET and DATALOADER
-test_dataset = get_datasets(config)
-test_dataloader = get_dataloaders(config, test_dataset)
+train_dataset = get_datasets(config, args)
+train_dataloader = get_dataloaders(config, train_dataset)
 
 ##############################################################################################
 ##############################################################################################
@@ -61,40 +67,71 @@ print(f"Trained SwinCVS weights loaded successfully for INFERENCE - name: {args.
 model.to('cuda')
 torch.cuda.empty_cache()
 
+criterion = nn.BCEWithLogitsLoss()
 
-print('\nTesting')
 model.eval()
-# Performance measurement variables
-test_probabilities = []
-test_predictions = []
-test_targets = []
 
-with torch.inference_mode():
-    for idx, (samples, targets) in enumerate(tqdm(test_dataloader)):
-
-        # Get preds
-        samples, targets = samples.to('cuda'), targets.to('cuda')
-        
-        outputs_lstm = model(samples)
-
-        # Get outputs
-        test_probability = torch.sigmoid(outputs_lstm)
-        test_prediction = torch.round(test_probability)
+atk = PGD_BCE(model, eps=6/255, alpha=2/255, steps=8)
+n_iters = 100
+os.makedirs(f'visualizations/Fold{config.FOLD}', exist_ok=True)
+save_path = '/media/lambda001/SSD3/leoshared/Dataset/frames_adv'
+os.makedirs(save_path, exist_ok=True)
 
 
-        # Save results from a batch to a list
-        test_probabilities.append(test_probability.to('cpu'))
-        test_predictions.append(test_prediction.to('cpu'))
-        test_targets.append(targets.to('cpu'))
+all_img_info = []
 
-        torch.cuda.synchronize()
+for idx, (samples, targets, img_path) in enumerate(tqdm(train_dataloader)):
+    
+    #Get preds
+    samples, targets = samples.to('cuda'), targets.to('cuda')
+    adv_images = atk(samples, targets)
 
-# Calculate metrics
-C1_ap, C2_ap, C3_ap, mAP = get_map(test_targets, test_probabilities)
+    # Forward normal
+    outputs = model(samples)
+    # Forward adversario
+    adv_outputs = model(adv_images)
 
-# Print metrics
-print('\nTesting results:')
-print('mAP', round(mAP, 4))
-print('C1 ap', round(C1_ap, 4))
-print('C2 ap', round(C2_ap, 4))
-print('C3 ap', round(C3_ap, 4))
+    preds = torch.sigmoid(outputs).round()
+    adv_preds = torch.sigmoid(adv_outputs).round()
+
+    # Save adversarial example
+    formated_img_name = save_adv_example(adv_images, img_path, save_path)
+    # Add info for json file
+    all_img_info.append({'file_name': formated_img_name, 'ds': targets.cpu().tolist()})
+
+
+    # Guardar visualización cada n_iters
+    if idx % n_iters == 0:
+        batch_size = min(4, samples.size(0))  # mostrar hasta 4 imágenes
+        fig, axes = plt.subplots(batch_size, 2, figsize=(6, 3*batch_size), constrained_layout=True)
+        if batch_size == 1:
+            axes = [axes]  # mantener indexable
+            
+        mse_per_image = F.mse_loss(adv_images, samples, reduction='none')
+        mse_per_image = mse_per_image.view(mse_per_image.size(0), -1).mean(dim=1)
+
+        for i in range(batch_size):
+            # Imagen original
+            axes[i][0].imshow(samples[i].permute(1, 2, 0).detach().cpu().numpy())
+            axes[i][0].axis("off")
+            axes[i][0].set_title(
+                f"GT: {targets[i].cpu().detach().numpy()}\n Ori Pred: {preds[i].cpu().detach().numpy()}", 
+                fontsize=9
+            )
+
+            # Imagen adversaria
+            axes[i][1].imshow(adv_images[i].permute(1, 2, 0).detach().cpu().numpy())
+            axes[i][1].axis("off")
+            axes[i][1].set_title(
+                f"GT: {targets[i].cpu().detach().numpy()}\nAdv Pred: {adv_preds[i].cpu().detach().numpy()}\nMSE: {mse_per_image[i].item():.6f}",
+                fontsize=9
+            )
+
+        plt.tight_layout()
+        plt.savefig(f"visualizations/Fold{config.FOLD}/adv_examples_batch{idx}.png")
+        plt.close()
+
+os.makedirs('adversarial_training_files', exist_ok=True)
+
+with open(f"adversarial_training_files/fold{config.FOLD}_train.json", "w") as f:
+    json.dump({'images': all_img_info}, f, indent=4)
