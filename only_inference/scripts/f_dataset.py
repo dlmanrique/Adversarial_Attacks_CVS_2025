@@ -12,31 +12,48 @@ def get_datasets(config, args):
     """
     Check dataset exists (download if not). Create dataset instances and apply transformations specified in config
     """
-
     dataset_dir = config.DATASET_DIR
     
     print(f"\nDataset loaded from: {dataset_dir}")
 
-    test_dataframe = get_dataframe_test(config, args)
+
+    train_dataframe, val_dataframe, test_dataframe = get_three_dataframes(dataset_dir, config, args)
     transform_sequence = get_transform_sequence(config)
     
+    print(f'Number of keyframes on train split: {len(train_dataframe)}')
+    print(f'Number of keyframes on valid split: {len(val_dataframe)}')
+    print(f'Number of keyframes on test split: {len(test_dataframe)}')
+
     # If just SwinV2 backbone
+    training_dataset = Endoscapes_Dataset(train_dataframe[::config.TRAIN.LIMIT_DATA_FRACTION], transform_sequence)
+    val_dataset = Endoscapes_Dataset(val_dataframe, transform_sequence)
     test_dataset = Endoscapes_Dataset(test_dataframe, transform_sequence)
 
-    return test_dataset
+
+    return training_dataset, val_dataset, test_dataset
 
 
-def get_dataloaders(config, test_dataset):
+def get_dataloaders(config, train_dataset, valid_dataset, test_dataset):
     """
     Create dataloaders from a given training datasets
     """
     print(f"Batch size: {config.TRAIN.BATCH_SIZE}")
 
+    train_dataloader = DataLoader(  train_dataset,
+                                        batch_size = config.TRAIN.BATCH_SIZE,
+                                        shuffle = True,
+                                        pin_memory = True)
+    
+    valid_dataloader = DataLoader(  valid_dataset,
+                                    batch_size = 1,
+                                    shuffle = False,
+                                    pin_memory = True)
+    
     test_dataloader = DataLoader(  test_dataset,
                                     batch_size = 1,
                                     shuffle = False,
                                     pin_memory = True)
-    return test_dataloader
+    return train_dataloader, valid_dataloader, test_dataloader
 
 
 def get_dataframe_test(config, args):
@@ -48,6 +65,37 @@ def get_dataframe_test(config, args):
     test_dataframe = get_dataframe(test_file, args)
     updated_test_dataframe = update_dataframe(test_dataframe, '../Dataset', config)
     return updated_test_dataframe
+
+def get_three_dataframes(image_folder, config, args):
+
+    # Mapear rutas según tipo de frame
+    train_paths = {
+        "Original": f"format_challenge_data/Sages_fold{config.FOLD}_train_data.json",
+        "Preprocessed": f"format_challenge_data/preprocessed_data/Fold{config.FOLD}/train.json",
+        "80:20": 'format_challenge_data/80:20_splits/train.json'
+    }
+
+    test_paths = {
+        "Original": f"format_challenge_data/Sages_fold{config.FOLD}_test_data.json",
+        "Preprocessed": f"format_challenge_data/preprocessed_data/Fold{config.FOLD}/test.json",
+        "80:20": 'format_challenge_data/80:20_splits/test.json'
+    }
+
+    # Seleccionar según args
+    train_file = train_paths.get('Original')
+    val_file = test_paths.get('Original')
+    test_file = test_paths.get('Original')
+
+    train_dataframe = get_dataframe(train_file)
+    val_dataframe = get_dataframe(val_file)
+    test_dataframe = get_dataframe(test_file)
+
+    updated_train_dataframe = update_dataframe(train_dataframe, config.DATASET_DIR, config, args, 'train')
+    updated_val_dataframe = update_dataframe(val_dataframe, config.DATASET_DIR, config, args, 'val')
+    updated_test_dataframe = update_dataframe(test_dataframe, config.DATASET_DIR, config, args, 'test')
+
+    return updated_train_dataframe, updated_val_dataframe, updated_test_dataframe
+
 
 
 class Endoscapes_Dataset(Dataset):
@@ -73,12 +121,12 @@ class Endoscapes_Dataset(Dataset):
             image = self.transforms(image)
             image = (image-torch.min(image)) / (-torch.min(image)+torch.max(image)) #Normalize the image in the interval (0,1)
       
-        return image, label, video_frame_id
+        return image, label
 
 
 
 
-def get_dataframe(json_path, args):
+def get_dataframe(json_path):
     """
     Get dataframes of the dataset splits in columns:
     idx | vid | frame | C1 | C2 | C3
@@ -105,29 +153,12 @@ def get_dataframe(json_path, args):
         C2_i = round(i['ds'][1])
         C3_i = round(i['ds'][2])
 
-        if args.adversarial_split == 'CVS_only' and (C1_i + C2_i + C3_i) == 3:
-            # Put in list
-            vid.append(vid_i)
-            frame.append(frame_i)
-            C1.append(C1_i)
-            C2.append(C2_i)
-            C3.append(C3_i)
-        
-        elif args.adversarial_split == 'One_only' and (C1_i + C2_i + C3_i) >= 1:
-            # Put in list
-            vid.append(vid_i)
-            frame.append(frame_i)
-            C1.append(C1_i)
-            C2.append(C2_i)
-            C3.append(C3_i)
-        
-        elif args.adversarial_split == 'All':
-            # Put in list
-            vid.append(vid_i)
-            frame.append(frame_i)
-            C1.append(C1_i)
-            C2.append(C2_i)
-            C3.append(C3_i)
+        # Put in list
+        vid.append(vid_i)
+        frame.append(frame_i)
+        C1.append(C1_i)
+        C2.append(C2_i)
+        C3.append(C3_i)
 
     data_dict = {'vid': vid,
                 'frame': frame,
@@ -140,7 +171,7 @@ def get_dataframe(json_path, args):
 
 
 
-def update_dataframe(dataframe, image_folder, config):
+def update_dataframe(dataframe, image_folder, config, args, split):
     """
     Function only for creation of dataframes when training backbone - SwinV2. It changes the structure of the dataframe from:
     idx | vid | frame | C1 | C2 | C3
@@ -189,7 +220,7 @@ def get_endoscapes_mean_std(config):
 
 def get_transform_sequence(config):
     mean, std = get_endoscapes_mean_std(config)
-    transform_sequence = transforms.Compose([   transforms.CenterCrop(config.TRAIN.TRANSFORMS.CENTER_CROP),
+    transform_sequence = transforms.Compose([transforms.CenterCrop(config.TRAIN.TRANSFORMS.CENTER_CROP),
                                                 transforms.Resize((384, 384)),
                                                 transforms.ToTensor(),
                                                 transforms.Normalize(

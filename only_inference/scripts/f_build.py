@@ -1,6 +1,7 @@
 from scripts.m_swinv2 import SwinTransformerV2, load_pretrained
 import torch
 import torch.nn as nn
+import os
 
 def build_model(config):
 
@@ -22,7 +23,10 @@ def build_model(config):
                                 use_checkpoint=config.BACKBONE.USE_CHECKPOINT,
                                 pretrained_window_sizes=config.BACKBONE.SWINV2.PRETRAINED_WINDOW_SIZES)
     
+
+    model.head = nn.Linear(in_features=1024, out_features=3, bias=True)
+    model.load_state_dict(torch.load(os.path.join('weights', config.BACKBONE.PRETRAINED), weights_only=True))
     # Only runs if the pure SwinV2 model option is selected
-    #model.head = nn.Linear(in_features=1024, out_features=3, bias=True)
+    
 
     return model

@@ -79,14 +79,26 @@ def download_extract_zip(download_path, url):
             zip_file_path.unlink()
             print(f"Cleaned up temporary zip file: {zip_file_path}")
 
-def get_config(config_path):
+def get_config(args):
     """
     Runs functions related to reading, processing, and informing user about the config setup.
     """
-    config_dict = read_config(config_path)
-    config = config_to_yacs(config_dict)
 
-    return config
+    config_dict = read_config(args.config_path)
+    config = config_to_yacs(config_dict)
+    experiment_name = validate_config(config) # de aca espero un str vacio ""
+
+    # Verify the selected model
+    if not config.MODEL.LSTM:
+        experiment_name += 'SwinV2_backbone'
+    if config.MODEL.LSTM:
+        experiment_name += 'SwinV2_and_LSTM'
+
+    # Verify dataset and fold
+    if config.DATASET == 'Sages':
+        experiment_name += '_Sages' + f'_fold{config.FOLD}'
+
+    return config, experiment_name
 
 def read_config(config_file):
     """
