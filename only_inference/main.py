@@ -56,7 +56,7 @@ wandb.init(
     project='SwinCVS_adversarial', 
     entity='endovis_bcv',
     config=wandb_config,
-    name=exp_name + '_ori_90-10'
+    name=exp_name + '_none'
 )
 
 # (Opcional) imprimir para verificar
@@ -140,19 +140,28 @@ for epoch in range(config.TRAIN.EPOCHS):
         # targets.shape -> (batch, 3)
         samples, targets = samples.to('cuda'), targets.to('cuda')
 
-        model.eval()
-        adv_images = adversary(samples, targets)
-
-        model.train()
-        # Forward limpio
-        outputs_lstm_original = model(samples)
-        loss_clean = criterion(outputs_lstm_original, targets)
-
-        # Forward adversario
-        outputs_adv = model(adv_images)
-        loss_adv = criterion(outputs_adv, targets)
+        if adversary is not None:
+            model.eval()
+            adv_images = adversary(samples, targets)
+            model.train()
         
-        loss_train = 0.9 * loss_clean + 0.1 * loss_adv
+            # Forward limpio
+            outputs_lstm_original = model(samples)
+            loss_clean = criterion(outputs_lstm_original, targets)
+
+            # Forward adversario
+            outputs_adv = model(adv_images)
+            loss_adv = criterion(outputs_adv, targets)
+            
+            loss_train = 0.9 * loss_clean + 0.1 * loss_adv
+
+            wandb.log({'Training original Loss': loss_clean.item()})
+            wandb.log({'Training adv Loss': loss_adv.item()})
+
+        else:
+            outputs_lstm_original = model(samples)
+            loss_clean = criterion(outputs_lstm_original, targets)
+            loss_train = loss_clean
 
         is_second_order = hasattr(optimizer, 'is_second_order') and optimizer.is_second_order
         grad_norm = loss_scaler(loss_train, optimizer, clip_grad=config.TRAIN.CLIP_GRAD,
@@ -161,8 +170,6 @@ for epoch in range(config.TRAIN.EPOCHS):
         
         optimizer.zero_grad()
         train_loss+=loss_train.item()
-        wandb.log({'Training original Loss': loss_clean.item()})
-        wandb.log({'Training adv Loss': loss_adv.item()})
         wandb.log({'Training Loss': loss_train.item()})
         torch.cuda.synchronize()
 

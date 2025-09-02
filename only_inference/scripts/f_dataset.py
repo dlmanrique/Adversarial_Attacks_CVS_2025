@@ -72,19 +72,27 @@ def get_three_dataframes(image_folder, config, args):
     train_paths = {
         "Original": f"format_challenge_data/Sages_fold{config.FOLD}_train_data.json",
         "Preprocessed": f"format_challenge_data/preprocessed_data/Fold{config.FOLD}/train.json",
-        "80:20": 'format_challenge_data/80:20_splits/train.json'
+        "80:20": 'format_challenge_data/80:20_splits/train.json',
+        'Adv_Extended': f"format_challenge_data/adversarial_training_files/fold{config.FOLD}_train.json"
     }
 
     test_paths = {
         "Original": f"format_challenge_data/Sages_fold{config.FOLD}_test_data.json",
         "Preprocessed": f"format_challenge_data/preprocessed_data/Fold{config.FOLD}/test.json",
-        "80:20": 'format_challenge_data/80:20_splits/test.json'
+        "80:20": 'format_challenge_data/80:20_splits/test.json',
+        "Adv_Extended": f"format_challenge_data/Sages_fold{config.FOLD}_test_data.json",
     }
 
+    if args.adv_attack == 'No':
+        key_files = 'Adv_Extended'
+    else:
+        key_files = 'Original'
+
+    
     # Seleccionar según args
-    train_file = train_paths.get('Original')
-    val_file = test_paths.get('Original')
-    test_file = test_paths.get('Original')
+    train_file = train_paths.get(key_files)
+    val_file = test_paths.get(key_files)
+    test_file = test_paths.get(key_files)
 
     train_dataframe = get_dataframe(train_file)
     val_dataframe = get_dataframe(val_file)
@@ -141,7 +149,6 @@ def get_dataframe(json_path):
     C3 = []
 
     # Condicionamos para extraer solamnete ejemplos que sean [1,1,1], que tengan al menos un 1 o pues todos
-    
     for i in data['images']:
         # Extract data
         file_name = i['file_name']
@@ -149,9 +156,15 @@ def get_dataframe(json_path):
         file_name = file_name.split('_')
         vid_i = file_name[0]
         frame_i = file_name[1]
-        C1_i = round(i['ds'][0]) #Con esto tienen en cuenta el tema de 3 anotadores
-        C2_i = round(i['ds'][1])
-        C3_i = round(i['ds'][2])
+
+        try:
+            C1_i = round(i['ds'][0]) #Con esto tienen en cuenta el tema de 3 anotadores
+            C2_i = round(i['ds'][1])
+            C3_i = round(i['ds'][2])
+        except:
+            C1_i = round(i['ds'][0][0])
+            C2_i = round(i['ds'][0][1])
+            C3_i = round(i['ds'][0][2])
 
         # Put in list
         vid.append(vid_i)
@@ -184,8 +197,31 @@ def update_dataframe(dataframe, image_folder, config, args, split):
     if config.DATASET == 'Endoscapes':
         dataframe['path'] = dataframe.apply(lambda row: generate_path(row, image_folder), axis=1)
     elif config.DATASET == 'Sages':
-        image_folder = os.path.join(image_folder, 'frames')
-        dataframe['path'] = dataframe.apply(lambda row: generate_path_sages(row, image_folder), axis=1)
+        if split == 'val' or split == 'test' or split == 'train':
+            image_folder_clean = os.path.join(image_folder, 'frames')
+            df_clean = dataframe.copy()
+            df_clean["path"] = df_clean.apply(
+                lambda row: generate_path_sages(row, image_folder_clean), axis=1
+            )
+            dataframe = df_clean
+
+        else:
+            image_folder_clean = os.path.join(image_folder, 'frames')
+            image_folder_adv = os.path.join(image_folder, 'frames_adv')
+
+            df_clean = dataframe.copy()
+            df_clean["path"] = df_clean.apply(
+                lambda row: generate_path_sages(row, image_folder_clean), axis=1
+            )
+
+            # Copia para adversarial
+            df_adv = dataframe.copy()
+            df_adv["path"] = df_adv.apply(
+                lambda row: generate_path_sages(row, image_folder_adv), axis=1
+            )
+
+            # Concatenar ambos
+            dataframe = pd.concat([df_clean, df_adv], ignore_index=True)
 
     dataframe['classification'] = dataframe.apply(lambda row: get_class(row), axis=1)
     dataframe.drop(columns=['vid', 'frame', 'C1', 'C2', 'C3'], inplace=True)
