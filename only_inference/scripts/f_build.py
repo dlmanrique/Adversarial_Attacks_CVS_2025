@@ -2,6 +2,20 @@ from scripts.m_swinv2 import SwinTransformerV2, load_pretrained
 import torch
 import torch.nn as nn
 import os
+import random
+import numpy as np
+
+
+seed = 5
+# Environment Standardisation
+random.seed(seed)                      # Set random seed
+np.random.seed(seed)                   # Set NumPy seed
+torch.manual_seed(seed)                # Set PyTorch seed
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+torch.cuda.manual_seed(seed)           # Set CUDA seed
+torch.use_deterministic_algorithms(True) # Force deterministic behavior
+os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8" # CUDA workspace config
 
 def build_model(config):
 
@@ -25,8 +39,7 @@ def build_model(config):
     
 
     model.head = nn.Linear(in_features=1024, out_features=3, bias=True)
-    model.load_state_dict(torch.load(os.path.join('weights', config.BACKBONE.PRETRAINED), weights_only=True))
+    model.load_state_dict(torch.load(os.path.join('weights', config.BACKBONE.PRETRAINED), weights_only=True), strict=True)
     # Only runs if the pure SwinV2 model option is selected
-    
 
     return model

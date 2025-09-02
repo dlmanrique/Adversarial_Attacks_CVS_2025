@@ -53,7 +53,7 @@ wandb_config = {**config_dict, **args_dict}
 exp_name = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
 
 wandb.init(
-    project='SwinCVS_adversarial', 
+    project='SwinCVS_sanity', 
     entity='endovis_bcv',
     config=wandb_config,
     name=exp_name + '_none'
@@ -134,6 +134,7 @@ for epoch in range(config.TRAIN.EPOCHS):
 
     print("Training")
     start_time = time.time()
+
     for idx, (samples, targets) in enumerate(tqdm(train_dataloader)):
         # Get predictions
         # samples.shape -> (batch, 3, 384, 384)
@@ -164,10 +165,10 @@ for epoch in range(config.TRAIN.EPOCHS):
             loss_train = loss_clean
 
         is_second_order = hasattr(optimizer, 'is_second_order') and optimizer.is_second_order
-        grad_norm = loss_scaler(loss_train, optimizer, clip_grad=config.TRAIN.CLIP_GRAD,
+        grad_norm = loss_scaler(model, loss_train, optimizer, clip_grad=config.TRAIN.CLIP_GRAD,
                                 parameters=model.parameters(), create_graph=is_second_order,
                                 update_grad=(idx + 1) % config.TRAIN.ACCUMULATION_STEPS == 0)
-        
+
         optimizer.zero_grad()
         train_loss+=loss_train.item()
         wandb.log({'Training Loss': loss_train.item()})
@@ -179,6 +180,7 @@ for epoch in range(config.TRAIN.EPOCHS):
     val_probabilities = []
     val_predictions = []
     val_targets = []
+    
     with torch.inference_mode():
         for idx, (samples, targets) in enumerate(tqdm(val_dataloader)):
             # Get predictions

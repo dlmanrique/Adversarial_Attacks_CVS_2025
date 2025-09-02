@@ -7,6 +7,8 @@ import json
 import pandas as pd
 from torchvision import transforms
 
+g = torch.Generator()
+g.manual_seed(5)
 
 def get_datasets(config, args):
     """
@@ -26,8 +28,8 @@ def get_datasets(config, args):
 
     # If just SwinV2 backbone
     training_dataset = Endoscapes_Dataset(train_dataframe[::config.TRAIN.LIMIT_DATA_FRACTION], transform_sequence)
-    val_dataset = Endoscapes_Dataset(val_dataframe, transform_sequence)
-    test_dataset = Endoscapes_Dataset(test_dataframe, transform_sequence)
+    val_dataset = Endoscapes_Dataset(val_dataframe[::config.TRAIN.LIMIT_DATA_FRACTION], transform_sequence)
+    test_dataset = Endoscapes_Dataset(test_dataframe[::config.TRAIN.LIMIT_DATA_FRACTION], transform_sequence)
 
 
     return training_dataset, val_dataset, test_dataset
@@ -42,7 +44,8 @@ def get_dataloaders(config, train_dataset, valid_dataset, test_dataset):
     train_dataloader = DataLoader(  train_dataset,
                                         batch_size = config.TRAIN.BATCH_SIZE,
                                         shuffle = True,
-                                        pin_memory = True)
+                                        pin_memory = True,
+                                        generator=g)
     
     valid_dataloader = DataLoader(  valid_dataset,
                                     batch_size = 1,
@@ -118,6 +121,7 @@ class Endoscapes_Dataset(Dataset):
         return len(self.image_dataframe)
     
     def __getitem__(self, idx):
+        
         image_info = self.image_dataframe.iloc[idx]
         image_path = image_info['path']
         label = torch.tensor(image_info['classification'])
@@ -128,7 +132,7 @@ class Endoscapes_Dataset(Dataset):
         if self.transforms:
             image = self.transforms(image)
             image = (image-torch.min(image)) / (-torch.min(image)+torch.max(image)) #Normalize the image in the interval (0,1)
-      
+        #print(f"Idx: {idx} -- Name: {'/'.join(image_path.split('/')[-2:])})")
         return image, label
 
 
